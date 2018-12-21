@@ -106,7 +106,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	if len(os.Args) > 2 {
+	if len(os.Args) < 2 {
 		fmt.Println("USAGE: ffcorpus sentences.txt [min?] [max?]")
 	}
 
