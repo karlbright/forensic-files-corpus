@@ -1,136 +1,118 @@
-package main
+package forensicfilescorpus
 
 import (
-	"bufio"
-	"flag"
-	"fmt"
-	"log"
+	"errors"
+	"math"
 	"math/rand"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/wargarblgarbl/libgosubs/srt"
 )
 
-const minimumLineLength = 8
+// MinimumLineLength used to determine the minimum length for a subtitle line in order to be used.
+// This is here initially to avoid weird issues with some Forensic Files subtitles that were
+// breaking across lines for a name, particular for a police officers title. Such as "Lt."
+const MinimumLineLength = 8
 
-func main() {
-	if len(os.Args) < 1 {
-		log.Fatal("Missing source or destination for sentences")
+// RemoveFromSubtitleRegexp matches things we do not want to have as part of our subtitles for
+// various reasons. This covers, in the same order as the regexp:
+// - Single source change line, such as "DIANNE M. ANDERSON:"
+// - Dialogue source change, such as "Narrator: They ran away" or "Skip Palenik: I'm a genius!"
+// - Conversation subtitles that can appear next to each other on the same screen.
+// - Actions and descriptive audio subtitles such as "[sirens]" and "[theme music]"
+var RemoveFromSubtitleRegexp = regexp.MustCompile(`^(.+:$|.+: |-|\[.+\])`)
+
+// IgnoreSubtitleRegexp matches subtitles that are not formatted correctly. This is primarily
+// used to avoid subtitles that exist from Youtube subtitles, and other sources that are unknown
+// to me. Some subtitles from the subtitles I have used were in ALL CAPS, and some of them
+// came from youtube and contained HTML, like "<font color="#CCCCC">Foo</Foo>".
+var IgnoreSubtitleRegexp = regexp.MustCompile(`^(>> Narrator:|Narrator:|^[^a-z]+$|<\/?.+?>)`)
+
+// StartToken matches against lines that can be used to begin a sentence. We do this by checking for
+// a capital letter, or a number. We also ensure that the line does not end with a quotation mark
+// to avoid an edge case where some titles and dialogue was being seen as a sentence in itself.
+var StartToken = regexp.MustCompile(`^[A-Z0-9].+[^"]$`)
+
+// EndToken matches against lines that we feel comfortable in ending a sentence in. These are the
+// common characters that will end a sentence.
+// - question mark
+// - excalamation mark
+// - a full stop
+// - a double quotation mark.
+// Although we do not accept this within `StartToken` at the end of a line, we allow it here as
+// we can be confident that a subtitle will not split a quote from someone over a line with the
+// double quotation mark being by itself at the end of a previous line. We hope.
+var EndToken = regexp.MustCompile(`(\?|!|\.|")$`)
+
+// StripAll is a convenience method to strip relevant subtitle sentences from a number of
+// subtitle files. See `Strip` for more information on how the subtitles are stripped.
+func StripAll(paths []string) (all []string) {
+	for _, path := range paths {
+		sentences, err := Strip(path)
+
+		if err != nil {
+			continue
+		}
+
+		all = append(all, sentences...)
 	}
 
-	ss := flag.Bool("strip", false, "Strip sentences from subtitles and write to disk")
-	gg := flag.Bool("generate", false, "Generate medium sized paragraph with 1 or more randomly picked sentences")
-	flag.Parse()
-
-	if *ss {
-		f, err := os.OpenFile("sentences.txt", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		defer func() {
-			if err := f.Close(); err != nil {
-				log.Fatal(err)
-			}
-		}()
-
-		sentences, _ := strip()
-
-		for _, sentence := range sentences {
-			f.WriteString(sentence + "\n")
-		}
-	} else {
-		var sentences []string
-
-		f, err := os.Open("sentences.txt")
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		defer func() {
-			if err := f.Close(); err != nil {
-				log.Fatal(err)
-			}
-		}()
-
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			sentences = append(sentences, sc.Text())
-		}
-
-		if *gg {
-			fmt.Println(strings.TrimSpace(generate(sentences)))
-		} else {
-			fmt.Println(pick(sentences))
-		}
-
-	}
+	return all
 }
 
-func strip() ([]string, []string) {
+// Strip will remove any sentences from a subtitle with replacements for things such as conversations,
+// dialogue target changes, descriptive audio lines, etc. We also make sure that the subtitle we are
+// stripping does not contain any ignored subtitles. See `IgnoreSubtitleRegexp` for more information
+// on what can cause a subtitle file to be ignored. In the case of a subtitle file encountering
+// a subtitle that matches the ignoring rules, then the whole subtitle is ignored.
+func Strip(path string) (sentences []string, err error) {
+	target, err := filepath.Abs(path)
+
+	if err != nil {
+		return sentences, errors.New("unable to retrieve absolute path for target")
+	}
+
+	subtitles, err := srt.ParseSrt(target)
+
+	if err != nil {
+		return sentences, errors.New("error parsing subtitle file")
+	}
+
 	var lines []string
 
-	files, err := filepath.Glob("in/*.srt")
-	if err != nil {
-		log.Fatal(err)
-	}
+	for _, subtitle := range subtitles.Subtitle.Content {
+		subtitle := strings.Join(subtitle.Line, " ")
+		subtitle = RemoveFromSubtitleRegexp.ReplaceAllString(subtitle, "")
 
-	for _, file := range files {
-		var slines []string
-
-		targetPath, _ := filepath.Abs(file)
-		subtitles, _ := srt.ParseSrt(targetPath)
-
-		re := regexp.MustCompile(`^(.+: |-|\[.+\])`)
-		ig := regexp.MustCompile(`^(>> Narrator:|Narrator:|^[^a-z]+$|<\/?.+?>)`)
-		skip := false
-
-		for _, sub := range subtitles.Subtitle.Content {
-			line := strings.Join(sub.Line, " ")
-			line = re.ReplaceAllString(line, "")
-
-			if ig.MatchString(line) || skip == true {
-				skip = true
-				break
-			}
-
-			if line != "" && len(line) > minimumLineLength {
-				slines = append(slines, line)
-			}
+		if IgnoreSubtitleRegexp.MatchString(subtitle) {
+			return sentences, errors.New("ignored subtitle file")
 		}
 
-		if skip == false {
-			lines = append(lines, slines...)
+		if subtitle != "" && len(subtitle) > MinimumLineLength {
+			lines = append(lines, subtitle)
 		}
 	}
 
-	var sentences []string
-	st := regexp.MustCompile(`^[A-Z0-9].+[^"]$`)
-	en := regexp.MustCompile(`(\?|!|\.|")$`)
-
-	for i, l := range lines {
-		if st.MatchString(l) {
-			if en.MatchString(l) {
-				sentences = append(sentences, l)
+	for index, line := range lines {
+		if StartToken.MatchString(line) {
+			if EndToken.MatchString(line) {
+				sentences = append(sentences, line)
 			} else {
-				ti := i
-				tl := l
+				currentIndex := index
+				currentLine := line
 
 				for {
-					ti = ti + 1
-
-					if ti > len(lines)-1 {
+					currentIndex = currentIndex + 1
+					if currentIndex > len(lines)-1 {
 						break
 					}
 
-					tl = strings.Join([]string{tl, lines[ti]}, " ")
+					currentLine = strings.Join([]string{currentLine, lines[currentIndex]}, " ")
 
-					if en.MatchString(tl) {
-						sentences = append(sentences, tl)
+					if EndToken.MatchString(currentLine) {
+						sentences = append(sentences, currentLine)
 						break
 					}
 				}
@@ -138,35 +120,78 @@ func strip() ([]string, []string) {
 		}
 	}
 
-	return sentences, lines
+	return sentences, nil
 }
 
-func pick(sentences []string) string {
-	s := rand.NewSource(time.Now().UnixNano())
-	r := rand.New(s)
+// Pick a random sentence from a collection of sentences provided as the first argument to the
+// method. A minimum and maximum chracter length for the sentence can be used to filter the
+// sentences. Passing a negative value to either one of these will use sensible defaults.
+// Uses the default source for randomisation, it is advised that you seed the default source
+// using something like `rand.Seed(time.Now().UnixNano()` in order to ensure you are picking
+// random values each time, rather than using the same deterministic seed.
+func Pick(sentences []string, min, max int) (string, error) {
+	if len(sentences) == 0 {
+		return "", errors.New("unable to pick from empty sentences slice")
+	}
 
-	return sentences[r.Intn(len(sentences)-1)]
-}
+	n := rand.Intn(len(sentences))
 
-func generate(sentences []string) string {
-	var str string
+	if min < 0 {
+		min = 0
+	}
 
-	s := rand.NewSource(time.Now().UnixNano())
-	r := rand.New(s)
+	if max < 0 {
+		max = math.MaxInt32
+	}
 
-	for {
-		nstr := strings.Join([]string{str, sentences[r.Intn(len(sentences)-1)]}, " ")
+	if min > max {
+		return "", errors.New("min value must be smaller than max")
+	}
 
-		if len(nstr) > 280 {
-			continue
-		}
+	if max < MinimumLineLength {
+		return "", errors.New("max value must be larger than the minimum sentence length")
+	}
 
-		str = strings.Replace(nstr, "--", "-", -1)
+	if max == -1 {
+		return sentences[n], nil
+	}
 
-		if len(str) > 220 {
-			break
+	var filtered []string
+	for _, sentence := range sentences {
+		if len(sentence) > min && len(sentence) < max {
+			filtered = append(filtered, sentence)
 		}
 	}
 
-	return str
+	if len(filtered) == 0 {
+		return "", errors.New("no candidates with given min and max values")
+	}
+
+	n = rand.Intn(len(filtered))
+	return filtered[n], nil
+}
+
+// Generate a random paragraph which can consist of one or many random sentences. This uses the
+// `Pick` method to pick a random sentence of a given length. A minimum and maximum character length
+// for the final paragraph can be provided. Passing a negative value to either one of these will
+// use sensible defaults. As this uses `Pick` to determine which random sentence is used, it should
+// be noted that you should seed the default source for randomisation. See `Pick` for more details.
+func Generate(sentences []string, min, max int) (out string, err error) {
+	for {
+		sentence, err := Pick(sentences, -1, max-len(out))
+
+		if err != nil {
+			return out, err
+		}
+
+		out = out + sentence
+
+		if len(out) > min {
+			break
+		}
+
+		out = out + " "
+	}
+
+	return out, nil
 }
