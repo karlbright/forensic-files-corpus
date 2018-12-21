@@ -229,6 +229,5 @@ func tweet() {
 	}
 
 	fmt.Println("https://twitter.com/" + tweet.User.ScreenName + "/status/" + tweet.IDStr)
-
-	os.Exit(1)
+	os.Exit(0)
 }
