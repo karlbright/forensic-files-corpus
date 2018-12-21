@@ -23,6 +23,7 @@ func main() {
 	}
 
 	ss := flag.Bool("strip", false, "Strip sentences from subtitles and write to disk")
+	gg := flag.Bool("generate", false, "Generate medium sized paragraph with 1 or more randomly picked sentences")
 	flag.Parse()
 
 	if *ss {
@@ -61,7 +62,12 @@ func main() {
 			sentences = append(sentences, sc.Text())
 		}
 
-		fmt.Println(pick(sentences))
+		if *gg {
+			fmt.Println(strings.TrimSpace(generate(sentences)))
+		} else {
+			fmt.Println(pick(sentences))
+		}
+
 	}
 }
 
