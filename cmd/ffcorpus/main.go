@@ -18,6 +18,13 @@ func main() {
 	pick := flag.Bool("pick", false, "Pick a random sentence from the given sentences sources")
 	flag.Parse()
 
+	if len(os.Args) == 1 {
+		fmt.Println("USAGE: ffcorpus --strip *.srt sentences.txt")
+		fmt.Println("USAGE: ffcorpus --pick sentences.txt [min?] [max?]")
+		fmt.Println("USAGE: ffcorpus sentences.txt [min?] [max?]")
+		os.Exit(1)
+	}
+
 	if *strip {
 		if len(os.Args) < 4 {
 			fmt.Println("USAGE: ffcorpus --strip *.srt sentences.txt")
