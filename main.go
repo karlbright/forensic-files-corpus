@@ -1,9 +1,11 @@
 package forensicfilescorpus
 
 import (
+	"bufio"
 	"errors"
 	"math"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -45,6 +47,26 @@ var StartToken = regexp.MustCompile(`^[A-Z0-9].+[^"]$`)
 // we can be confident that a subtitle will not split a quote from someone over a line with the
 // double quotation mark being by itself at the end of a previous line. We hope.
 var EndToken = regexp.MustCompile(`(\?|!|\.|")$`)
+
+// StripAllToFile is a convinence method to strip all relelvant usbtitles and save them out
+// to a given path, with each sentence being seperated by a line break.
+func StripAllToFile(paths []string, output string) error {
+	dest, err := os.OpenFile(output, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+
+	defer dest.Close()
+
+	sentences := StripAll(paths)
+
+	for _, sentence := range sentences {
+		dest.WriteString(sentence)
+		dest.WriteString("\n")
+	}
+
+	return nil
+}
 
 // StripAll is a convenience method to strip relevant subtitle sentences from a number of
 // subtitle files. See `Strip` for more information on how the subtitles are stripped.
@@ -123,6 +145,30 @@ func Strip(path string) (sentences []string, err error) {
 	return sentences, nil
 }
 
+// PickFromFile is a convenience method to pick a random sentence from a list of sentences
+// found within the file provided by path parameter.
+func PickFromFile(path string, min, max int) (string, error) {
+	src, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+
+	defer src.Close()
+
+	var sentences []string
+	scanner := bufio.NewScanner(src)
+	for scanner.Scan() {
+		sentences = append(sentences, scanner.Text())
+	}
+
+	sentence, err := Pick(sentences, min, max)
+	if err != nil {
+		return "", err
+	}
+
+	return sentence, nil
+}
+
 // Pick a random sentence from a collection of sentences provided as the first argument to the
 // method. A minimum and maximum chracter length for the sentence can be used to filter the
 // sentences. Passing a negative value to either one of these will use sensible defaults.
@@ -169,6 +215,30 @@ func Pick(sentences []string, min, max int) (string, error) {
 
 	n = rand.Intn(len(filtered))
 	return filtered[n], nil
+}
+
+// GenerateFromFile is a convenience method to generate a random paragraph from a list of sentences
+// found within the file provided by path parameter.
+func GenerateFromFile(path string, min, max int) (string, error) {
+	src, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+
+	defer src.Close()
+
+	var sentences []string
+	scanner := bufio.NewScanner(src)
+	for scanner.Scan() {
+		sentences = append(sentences, scanner.Text())
+	}
+
+	paragraph, err := Generate(sentences, min, max)
+	if err != nil {
+		return "", err
+	}
+
+	return paragraph, nil
 }
 
 // Generate a random paragraph which can consist of one or many random sentences. This uses the
